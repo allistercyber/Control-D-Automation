@@ -1,0 +1,79 @@
+name: Sync Control D folders from upstream
+
+# ── Schedule ───────────────────────────────────────────────────────────────────
+# Runs twice daily.  Can also be triggered manually from the Actions tab.
+on:
+  schedule:
+    - cron: '0 5  * * *'   # 05:00 UTC daily
+    - cron: '0 17 * * *'   # 17:00 UTC daily
+  workflow_dispatch:
+
+# ── Permissions ────────────────────────────────────────────────────────────────
+# contents: write — needed to commit synced JSON files back to the repo.
+# Everything else is explicitly denied (principle of least privilege).
+permissions:
+  contents: write
+  issues: none
+  pull-requests: none
+
+# ── Jobs ───────────────────────────────────────────────────────────────────────
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Checkout without persisting credentials; the sync script sets the
+      # remote URL with GITHUB_TOKEN at push time instead.
+      - name: Checkout repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.14'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # ── Stage 1: Sync files from upstream ────────────────────────────────────
+      # Downloads the target JSON files from hagezi/dns-blocklists, diffs them
+      # against the local copies, commits changes, and sets changed=true/false.
+      - name: Sync files from upstream
+        id: sync
+        env:
+          GITHUB_TOKEN:      ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EMAIL_SERVER:      ${{ secrets.EMAIL_SERVER }}
+          EMAIL_PORT:        ${{ secrets.EMAIL_PORT }}
+          EMAIL_USERNAME:    ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD:    ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_FROM:        ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO:          ${{ secrets.EMAIL_TO }}
+        run: python scripts/controld_sync.py
+
+      # ── Stage 2: Push domain changes to Control D API ────────────────────────
+      # Only runs when Stage 1 detected file changes.
+      # A non-zero exit emits a warning annotation but does NOT fail the job,
+      # so the email report is always delivered regardless.
+      - name: Push changes to Control D API
+        id: push
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          CTRLD_API_TOKEN: ${{ secrets.CTRLD_API_TOKEN }}
+          EMAIL_SERVER:    ${{ secrets.EMAIL_SERVER }}
+          EMAIL_PORT:      ${{ secrets.EMAIL_PORT }}
+          EMAIL_USERNAME:  ${{ secrets.EMAIL_USERNAME }}
+          EMAIL_PASSWORD:  ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_FROM:      ${{ secrets.EMAIL_FROM }}
+          EMAIL_TO:        ${{ secrets.EMAIL_TO }}
+        run: |
+          python scripts/controld_api_push.py
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::warning::Control D API push finished with errors (exit $EXIT_CODE). Check the step log."
+          fi
+          exit 0   # never fail the job — email always sends from within the script
