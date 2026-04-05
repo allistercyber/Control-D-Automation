@@ -3,11 +3,9 @@ name: Sync Control D folders from upstream
 # ── Schedule ───────────────────────────────────────────────────────────────────
 # Runs twice daily.  Can also be triggered manually from the Actions tab.
 on:
-# Uncomment the schedule block below once configuration is complete
-# (FILE_MAPPINGS, TARGET_FILES, and GitHub secrets are set up).
-#  schedule:
-#    - cron: '0 5  * * *'   # 05:00 UTC daily
-#    - cron: '0 17 * * *'   # 17:00 UTC daily
+  schedule:
+    - cron: '0 5  * * *'   # 05:00 UTC daily
+    - cron: '0 17 * * *'   # 17:00 UTC daily
   workflow_dispatch:
 
 # ── Permissions ────────────────────────────────────────────────────────────────
