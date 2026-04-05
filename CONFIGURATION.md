@@ -118,7 +118,7 @@ When changes are detected, the workflow can send an email report. Omit any to sk
 | Secret | Value | Description |
 |--------|-------|-------------|
 | `EMAIL_SERVER` | `smtp.gmail.com` | Gmail SMTP server |
-| `EMAIL_PORT` | `587` | Gmail STARTTLS port |
+| `EMAIL_PORT` | `465` | Gmail implicit TLS port |
 | `EMAIL_USERNAME` | Your Gmail address | e.g. `you@gmail.com` |
 | `EMAIL_PASSWORD` | Your Gmail App Password | Generate one at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords) — **not** your regular Gmail password |
 | `EMAIL_FROM` | Your Gmail address | Sender address |
@@ -184,4 +184,4 @@ The entries below document every pinned external dependency used by this repo. C
 #     python-version: "3.14"
 ```
 
-To update an action: find the new release tag and its corresponding full commit hash on the action's GitHub releases page, update the `uses:` line in `.github/workflows/sync-controld.txt` to the new commit hash, and update the entry above.
+To update an action: find the new release tag and its corresponding full commit hash on the action's GitHub releases page, update the `uses:` line in `.github/workflows/sync-controld.yml` to the new commit hash, and update the entry above.
