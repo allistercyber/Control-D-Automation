@@ -8,6 +8,13 @@ on:
 #    - cron: '0 17 * * *'   # 17:00 UTC daily
   workflow_dispatch:
 
+# ── Concurrency ────────────────────────────────────────────────────────────────
+# Prevent overlapping runs (e.g. scheduled + manual trigger at the same time).
+# A new run cancels any in-progress run so the latest upstream state always wins.
+concurrency:
+  group: controld-sync
+  cancel-in-progress: true
+
 # ── Permissions ────────────────────────────────────────────────────────────────
 # contents: write — needed to commit synced JSON files back to the repo.
 # Everything else is explicitly denied (principle of least privilege).
@@ -52,8 +59,8 @@ jobs:
 
       # ── Stage 2: Push domain changes to Control D API ────────────────────────
       # Only runs when Stage 1 detected file changes.
-      # A non-zero exit emits a warning annotation but does NOT fail the job,
-      # so the email report is always delivered regardless.
+      # The email report is sent from within the script before sys.exit(), so it
+      # is delivered regardless of success or failure. The job fails on errors.
       - name: Push changes to Control D API
         id: push
         if: steps.sync.outputs.changed == 'true'
@@ -69,6 +76,6 @@ jobs:
           python scripts/controld_api_push.py
           EXIT_CODE=$?
           if [ $EXIT_CODE -ne 0 ]; then
-            echo "::warning::Control D API push finished with errors (exit $EXIT_CODE). Check the step log."
+            echo "::error::Control D API push finished with errors (exit $EXIT_CODE). Check the step log."
+            exit $EXIT_CODE
           fi
-          exit 0   # never fail the job — email always sends from within the script

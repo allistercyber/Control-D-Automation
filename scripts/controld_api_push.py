@@ -95,13 +95,18 @@ FILE_MAPPINGS: Dict[str, List[Tuple[str, str]]] = {
 # INTERNAL CONSTANTS — no need to change these
 # ══════════════════════════════════════════════════════════════════════════════
 
-BASE_URL      = "https://api.controld.com"
-PAGE_SIZE     = 500    # max hostnames per POST /rules batch request
-REQUEST_DELAY = 0.5    # seconds between API calls (rate-limit headroom)
-DELETE_DELAY  = 0.25   # seconds between individual DELETE calls
+BASE_URL           = "https://api.controld.com"
+PAGE_SIZE          = 500    # max hostnames per POST /rules batch request
+REQUEST_DELAY      = 0.5    # seconds between API calls (rate-limit headroom)
+DELETE_DELAY       = 0.25   # seconds between individual DELETE calls
+MAX_DELETE_PERCENT = 50     # abort if removals exceed this % of the live folder size
 
 
 # ── API helpers ───────────────────────────────────────────────────────────────
+
+API_MAX_RETRIES  = 3
+API_RETRY_DELAYS = [2, 5, 10]  # seconds between attempts
+
 
 def _headers(api_token: str) -> dict:
     return {
@@ -111,9 +116,22 @@ def _headers(api_token: str) -> dict:
 
 
 def _get(url: str, api_token: str) -> dict:
-    resp = requests.get(url, headers=_headers(api_token), timeout=30)
-    resp.raise_for_status()
-    return resp.json()
+    last_exc: Exception = RuntimeError("No attempts made")
+    for attempt, delay in enumerate(
+        [0] + API_RETRY_DELAYS[:API_MAX_RETRIES - 1], start=1
+    ):
+        if delay:
+            log.warning(f"Retrying GET {url} in {delay}s (attempt {attempt}/{API_MAX_RETRIES})")
+            time.sleep(delay)
+        try:
+            resp = requests.get(url, headers=_headers(api_token), timeout=30)
+            resp.raise_for_status()
+            return resp.json()
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt < API_MAX_RETRIES:
+                continue
+    raise last_exc
 
 
 def fetch_profiles(api_token: str) -> Dict[str, str]:
@@ -178,13 +196,26 @@ def add_hostnames_batch(
             "group":     folder_pk,
             "hostnames": chunk,
         }
-        resp = requests.post(
-            f"{BASE_URL}/profiles/{profile_pk}/rules",
-            headers=_headers(api_token),
-            json=payload,
-            timeout=30,
-        )
-        resp.raise_for_status()
+        last_exc: Exception = RuntimeError("No attempts made")
+        for attempt, delay in enumerate(
+            [0] + API_RETRY_DELAYS[:API_MAX_RETRIES - 1], start=1
+        ):
+            if delay:
+                log.warning(f"Retrying POST rules in {delay}s (attempt {attempt}/{API_MAX_RETRIES})")
+                time.sleep(delay)
+            try:
+                resp = requests.post(
+                    f"{BASE_URL}/profiles/{profile_pk}/rules",
+                    headers=_headers(api_token),
+                    json=payload,
+                    timeout=30,
+                )
+                resp.raise_for_status()
+                break
+            except requests.RequestException as exc:
+                last_exc = exc
+                if attempt >= API_MAX_RETRIES:
+                    raise last_exc
         total += len(chunk)
         log.info(f"    [add] POSTed {len(chunk)} hostnames (running total: {total})")
         time.sleep(REQUEST_DELAY)
@@ -196,15 +227,28 @@ def delete_hostname(profile_pk: str, hostname: str, api_token: str) -> None:
     DELETEs a single hostname rule from a profile.
     404 is treated as success (already gone — idempotent).
     """
-    resp = requests.delete(
-        f"{BASE_URL}/profiles/{profile_pk}/rules/{quote(hostname, safe='')}",
-        headers=_headers(api_token),
-        timeout=30,
-    )
-    if resp.status_code == 404:
-        log.debug(f"    [remove] {hostname} already absent (404)")
-        return
-    resp.raise_for_status()
+    last_exc: Exception = RuntimeError("No attempts made")
+    for attempt, delay in enumerate(
+        [0] + API_RETRY_DELAYS[:API_MAX_RETRIES - 1], start=1
+    ):
+        if delay:
+            log.warning(f"Retrying DELETE {hostname} in {delay}s (attempt {attempt}/{API_MAX_RETRIES})")
+            time.sleep(delay)
+        try:
+            resp = requests.delete(
+                f"{BASE_URL}/profiles/{profile_pk}/rules/{quote(hostname, safe='')}",
+                headers=_headers(api_token),
+                timeout=30,
+            )
+            if resp.status_code == 404:
+                log.debug(f"    [remove] {hostname} already absent (404)")
+                return
+            resp.raise_for_status()
+            return
+        except requests.RequestException as exc:
+            last_exc = exc
+            if attempt >= API_MAX_RETRIES:
+                raise last_exc
 
 
 # ── JSON parsing ──────────────────────────────────────────────────────────────
@@ -231,11 +275,23 @@ def extract_desired_hostnames(file_path: str) -> Optional[Set[str]]:
         log.error(f"JSON parse error in {file_path}: {exc}")
         return None
 
+    rules = data.get("rules")
+    if rules is None:
+        log.error(f"Missing 'rules' key in {file_path} — refusing to sync (would wipe folder)")
+        return None
+
     hostnames: Set[str] = set()
-    for rule in data.get("rules", []):
+    for rule in rules:
         h = rule.get("PK", "").strip().lower()
         if h:
             hostnames.add(h)
+
+    if not hostnames:
+        log.error(
+            f"No hostnames extracted from {file_path} — refusing to treat empty set as "
+            f"desired state (would wipe folder). Skipping."
+        )
+        return None
 
     return hostnames
 
@@ -266,6 +322,21 @@ def sync_folder(
     to_remove = sorted(live - desired)
 
     log.info(f"  Delta: +{len(to_add)} to add, -{len(to_remove)} to remove")
+
+    # Safety guardrail: refuse to execute if removals are unusually large relative
+    # to the live folder size.  This catches upstream truncation/breakage that
+    # slipped past the empty-set check (e.g. a file legitimately cut from 5 000
+    # to 10 entries would still reach here).
+    if live and to_remove:
+        remove_pct = len(to_remove) * 100 // len(live)
+        if remove_pct > MAX_DELETE_PERCENT:
+            log.error(
+                f"  Aborting sync for '{folder_name}': {len(to_remove)} removals "
+                f"({remove_pct}% of {len(live)} live entries) exceeds the "
+                f"{MAX_DELETE_PERCENT}% safety threshold. "
+                f"Set MAX_DELETE_PERCENT higher if this is intentional."
+            )
+            return False, [], []
 
     success          = True
     actually_added:   List[str] = []
