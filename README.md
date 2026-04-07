@@ -76,12 +76,16 @@ Go to **Actions → Sync Control D folders from upstream → Run workflow** to t
 
 ```
 .github/
+  dependabot.yml            # weekly auto-updates for Actions & pip deps
   workflows/
     sync-controld.yml       # workflow orchestrator
 scripts/
   controld_sync.py          # Stage 1: file sync
   controld_api_push.py      # Stage 2: Control D API push
-requirements.txt            # pinned Python dependencies
+requirements.in             # direct Python dependencies (source of truth)
+requirements.txt            # fully pinned deps with SHA-256 hashes (generated)
+CONFIGURATION.md            # detailed setup & configuration reference
+.gitignore
 controld/                   # synced JSON files (created on first run)
 ```
 
