@@ -78,8 +78,6 @@ jobs:
           EMAIL_SERVER:    ${{ secrets.EMAIL_SERVER }}
           EMAIL_USERNAME:  ${{ secrets.EMAIL_USERNAME }}
           EMAIL_PASSWORD:  ${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_FROM:      ${{ secrets.EMAIL_FROM }}
-          EMAIL_TO:        ${{ secrets.EMAIL_TO }}
         run: |
           python scripts/controld_api_push.py
           EXIT_CODE=$?

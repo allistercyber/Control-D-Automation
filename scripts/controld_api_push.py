@@ -535,16 +535,14 @@ def send_email(email_body: str) -> None:
     server    = os.environ.get("EMAIL_SERVER",   "").strip()
     username  = os.environ.get("EMAIL_USERNAME", "").strip()
     password  = os.environ.get("EMAIL_PASSWORD", "").strip()
-    from_addr = os.environ.get("EMAIL_FROM",     "").strip()
-    to_addr   = os.environ.get("EMAIL_TO",       "").strip()
 
-    if not all([server, from_addr, to_addr]):
-        log.warning("Email not configured (EMAIL_SERVER/EMAIL_FROM/EMAIL_TO missing) — skipping")
+    if not all([server, username]):
+        log.warning("Email not configured (EMAIL_SERVER/EMAIL_USERNAME missing) — skipping")
         return
 
     msg = MIMEMultipart()
-    msg["From"]    = from_addr
-    msg["To"]      = to_addr
+    msg["From"]    = username
+    msg["To"]      = username
     msg["Subject"] = "Control D sync report"
     msg.attach(MIMEText(email_body, "plain"))
 
